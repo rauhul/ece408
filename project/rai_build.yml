@@ -12,4 +12,4 @@ commands:
   build:
     - echo "Building project"
     - /src/build.sh
-    - nvprof python /src/m1.2.py
+    - python /src/m2.1.py
