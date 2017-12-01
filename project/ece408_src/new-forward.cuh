@@ -29,36 +29,25 @@ __global__ void forward_kernel(DType *y, const DType *x, const DType *k, const i
     #define x4d(i3,i2,i1,i0) x[(i3) * (C * H * W) + (i2)*(H * W) + (i1)*(W) + i0]
     #define k4d(i3,i2,i1,i0) k[(i3) * (C * K * K) + (i2)*(K * K) + (i1)*(K) + i0]
 
-    /*
-        Your code here!
-    */
-	const int W_grid = ceil(W_out / (double) TILE_WIDTH);
+    const int W_grid = ceil(W_out / (double) TILE_WIDTH);
 
-	int n, m, h, w, c, p, q;
-	n = blockIdx.x;
-	m = blockIdx.y;
-	h = (blockIdx.z / W_grid) * blockDim.y + threadIdx.y;
-	w = (blockIdx.z % W_grid) * blockDim.x + threadIdx.x;
-	//if(m == 0 && n == 0)
-		//printf("hi rabool: %i %i\n", h, w);
+    int n, m, h, w, c, p, q;
+    n = blockIdx.x;
+    m = blockIdx.y;
+    h = (blockIdx.z / W_grid) * blockDim.y + threadIdx.y;
+    w = (blockIdx.z % W_grid) * blockDim.x + threadIdx.x;
 
-	if(h < H_out && w < W_out)
-	{
-		float acc = 0;
+    if(h < H_out && w < W_out) {
+        float acc = 0;
 
-		for(c = 0; c < C; c++)
-		{
-			for(p = 0; p < K; p++)
-			{
-				for(q = 0; q < K; q++)
-				{
-					acc += x4d(n, c, h+p, w+q) * k4d(m, c, p, q);
-				}
-			}
-		}
-		y4d(n,m,h,w) = acc;
-	}
-	
+        for(c = 0; c < C; c++)
+            for(p = 0; p < K; p++)
+                for(q = 0; q < K; q++)
+                    acc += x4d(n, c, h+p, w+q) * k4d(m, c, p, q);
+
+        y4d(n,m,h,w) = acc;
+    }
+
     #undef y4d
     #undef x4d
     #undef k4d
@@ -71,7 +60,7 @@ __global__ void forward_kernel(DType *y, const DType *x, const DType *k, const i
 // Any code you write should be executed by this function
 template<typename gpu, typename DType>
 void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DType> &x, const mshadow::Tensor<gpu, 4, DType> &w) {
-    
+
 
     // Use mxnet's CHECK_EQ to do assertions.
     //CHECK_EQ(0, 1) << "Missing an ECE408 GPU implementation!";
@@ -85,23 +74,23 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
     // Set the kernel dimensions
     // dim3 gridDim(0);
     // dim3 blockDim(0);
-	const int B = x.shape_[0];
-	const int M = y.shape_[1];
-	const int C = x.shape_[1];
-	const int H = x.shape_[2];
-	const int W = x.shape_[3];
-	const int K = w.shape_[3];
+    const int B = x.shape_[0];
+    const int M = y.shape_[1];
+    const int C = x.shape_[1];
+    const int H = x.shape_[2];
+    const int W = x.shape_[3];
+    const int K = w.shape_[3];
 
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
-	const int W_grid = ceil(W_out / (double) TILE_WIDTH);
-	const int H_grid = ceil(H_out / (double) TILE_WIDTH);
-	const int Z = H_grid * W_grid;
-	
-	printf("Values: %i,%i,%i,%i,%i\n", H_out, W_out, W_grid, H_grid, Z);
+    const int W_grid = ceil(W_out / (double) TILE_WIDTH);
+    const int H_grid = ceil(H_out / (double) TILE_WIDTH);
+    const int Z = H_grid * W_grid;
 
-	dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
-	dim3 gridDim(B, M, Z);
+    // printf("Values: %i,%i,%i,%i,%i\n", H_out, W_out, W_grid, H_grid, Z);
+
+    dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
+    dim3 gridDim(B, M, Z);
 
     // Call the kernel
     forward_kernel<gpu, DType><<<gridDim, blockDim, 0, s>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
