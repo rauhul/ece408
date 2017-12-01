@@ -3,6 +3,7 @@
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 
 #include <mxnet/base.h>
+#define TILE_WIDTH 16
 
 namespace mxnet
 {
@@ -31,7 +32,27 @@ __global__ void forward_kernel(DType *y, const DType *x, const DType *k, const i
     /*
         Your code here!
     */
+	const int W_grid = W_out / TILE_WIDTH;
 
+	int n, m, h, w, c, p, q;
+	n = blockIdx.x;
+	m = blockIdx.y;
+	h = blockIdx.z / W_grid + threadIdx.y;
+	w = blockIdx.z % W_grid + threadIdx.x;
+	float acc = 0;
+
+	for(c = 0; c < C; c++)
+	{
+		for(p = 0; p < K; p++)
+		{
+			for(q = 0; q < K; q++)
+			{
+				acc += x4d(n, c, h+p, w+q) * k4d(m, c, p, q);
+			}
+		}
+	}
+	y4d(n,m,h,w) = acc;
+	
     #undef y4d
     #undef x4d
     #undef k4d
@@ -47,10 +68,10 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
     
 
     // Use mxnet's CHECK_EQ to do assertions.
-    CHECK_EQ(0, 1) << "Missing an ECE408 GPU implementation!";
+    //CHECK_EQ(0, 1) << "Missing an ECE408 GPU implementation!";
 
     // You'll probably need to launch kernels against the right stream to keep MXNet happy
-    // cudaStream_t s = y.stream_->stream_;
+    cudaStream_t s = y.stream_->stream_;
 
     // Extract the tensor dimensions into B,M,C,H,W,K
     // ...
@@ -58,9 +79,24 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
     // Set the kernel dimensions
     // dim3 gridDim(0);
     // dim3 blockDim(0);
+	const int B = x.shape_[0];
+	const int M = y.shape_[1];
+	const int C = x.shape_[1];
+	const int H = x.shape_[2];
+	const int W = x.shape_[3];
+	const int K = w.shape_[3];
+
+    const int H_out = H - K + 1;
+    const int W_out = W - K + 1;
+	const int W_grid = W_out / TILE_WIDTH;
+	const int H_grid = H_out / TILE_WIDTH;
+	const int Z = H_grid * W_grid;
+
+	dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
+	dim3 gridDim(B, M, Z);
 
     // Call the kernel
-    // forward_kernel<gpu, DType><<<gridDim, blockDim, 0, s>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
+    forward_kernel<gpu, DType><<<gridDim, blockDim, 0, s>>>(y.dptr_,x.dptr_,w.dptr_, B,M,C,H,W,K);
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());

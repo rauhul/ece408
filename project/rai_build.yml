@@ -12,4 +12,4 @@ commands:
   build:
     - echo "Building project"
     - /src/build.sh
-    - python /src/m2.1.py
+    - python /src/m3.1.py ece408-low 100
