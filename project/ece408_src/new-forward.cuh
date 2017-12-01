@@ -32,26 +32,32 @@ __global__ void forward_kernel(DType *y, const DType *x, const DType *k, const i
     /*
         Your code here!
     */
-	const int W_grid = W_out / TILE_WIDTH;
+	const int W_grid = ceil(W_out / (double) TILE_WIDTH);
 
 	int n, m, h, w, c, p, q;
 	n = blockIdx.x;
 	m = blockIdx.y;
-	h = blockIdx.z / W_grid + threadIdx.y;
-	w = blockIdx.z % W_grid + threadIdx.x;
-	float acc = 0;
+	h = (blockIdx.z / W_grid) * blockDim.y + threadIdx.y;
+	w = (blockIdx.z % W_grid) * blockDim.x + threadIdx.x;
+	//if(m == 0 && n == 0)
+		//printf("hi rabool: %i %i\n", h, w);
 
-	for(c = 0; c < C; c++)
+	if(h < H_out && w < W_out)
 	{
-		for(p = 0; p < K; p++)
+		float acc = 0;
+
+		for(c = 0; c < C; c++)
 		{
-			for(q = 0; q < K; q++)
+			for(p = 0; p < K; p++)
 			{
-				acc += x4d(n, c, h+p, w+q) * k4d(m, c, p, q);
+				for(q = 0; q < K; q++)
+				{
+					acc += x4d(n, c, h+p, w+q) * k4d(m, c, p, q);
+				}
 			}
 		}
+		y4d(n,m,h,w) = acc;
 	}
-	y4d(n,m,h,w) = acc;
 	
     #undef y4d
     #undef x4d
@@ -88,9 +94,11 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
 
     const int H_out = H - K + 1;
     const int W_out = W - K + 1;
-	const int W_grid = W_out / TILE_WIDTH;
-	const int H_grid = H_out / TILE_WIDTH;
+	const int W_grid = ceil(W_out / (double) TILE_WIDTH);
+	const int H_grid = ceil(H_out / (double) TILE_WIDTH);
 	const int Z = H_grid * W_grid;
+	
+	printf("Values: %i,%i,%i,%i,%i\n", H_out, W_out, W_grid, H_grid, Z);
 
 	dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
 	dim3 gridDim(B, M, Z);
