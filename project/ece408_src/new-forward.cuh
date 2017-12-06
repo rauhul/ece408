@@ -3,24 +3,30 @@
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 
 #include <mxnet/base.h>
+
 #define TILE_WIDTH 28
+
+#define NUM_KERNELS 50
+#define KERNEL_SIZE 5
 
 namespace mxnet
 {
 namespace op
 {
 
-// __constant__ float *kernels;
+
+__constant__ float kernels[NUM_KERNELS * KERNEL_SIZE * KERNEL_SIZE];
+
 
 template<typename gpu, typename DType>
-__global__ void forward_kernel(DType *y, const DType *x, const DType *k, const int B, const int M, const int H, const int W, const int K) {
+__global__ void forward_kernel(DType *y, const DType *x, const int B, const int M, const int H, const int W, const int K) {
 
     const int H_out = 24;
     const int W_out = 24;
 
     #define y4d(i3,i2,i1,i0) y[(i3) * (M * H_out * W_out) + (i2)*(H_out * W_out) + (i1)*(W_out) + i0]
     #define x4d(i3,i1,i0)    x[(i3) * (H * W) + (i1)*(W) + i0]
-    #define k4d(i3,i1,i0)    k[(i3) * (K * K) + (i1)*(K) + i0]
+    #define k4d(i3,i1,i0)    kernels[(i3) * (K * K) + (i1)*(K) + i0]
 
     int n = blockIdx.x;
     int m = blockIdx.y;
@@ -89,18 +95,9 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
 // y.shape_[2]24
 // y.shape_[3]24
 
-    // Use mxnet's CHECK_EQ to do assertions.
-    //CHECK_EQ(0, 1) << "Missing an ECE408 GPU implementation!";
-
     // You'll probably need to launch kernels against the right stream to keep MXNet happy
     cudaStream_t s = y.stream_->stream_;
 
-    // Extract the tensor dimensions into B,M,C,H,W,K
-    // ...
-
-    // Set the kernel dimensions
-    // dim3 gridDim(0);
-    // dim3 blockDim(0);
     const int B = x.shape_[0];
     const int M = y.shape_[1];
     const int C = x.shape_[1];
@@ -108,14 +105,13 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
     const int W = x.shape_[3];
     const int K = w.shape_[3];
 
-    const int H_out = H - K + 1;
-    const int W_out = W - K + 1;
-
     dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
     dim3 gridDim(B, M, 1);
 
+    cudaMemcpyToSymbol(kernels, w.dptr_, NUM_KERNELS * KERNEL_SIZE * KERNEL_SIZE * sizeof(float), 0, cudaMemcpyHostToDevice);
+
     // Call the kernel
-    forward_kernel<gpu, DType><<<gridDim, blockDim, 0, s>>>(y.dptr_,x.dptr_,w.dptr_, B,M,H,W,K);
+    forward_kernel<gpu, DType><<<gridDim, blockDim, 0, s>>>(y.dptr_,x.dptr_, B,M,H,W,K);
 
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
