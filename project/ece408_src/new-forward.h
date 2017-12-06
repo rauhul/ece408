@@ -20,13 +20,12 @@ namespace mxnet {
              *  We have added an additional dimension to the tensors to support an entire mini-batch
              *  The goal here is to be correct, not fast (this is the CPU implementation.)
              */
-
-            const int B = x.shape_[0];
-            const int M = y.shape_[1];
-            const int C = x.shape_[1];
-            const int H = x.shape_[2];
-            const int W = x.shape_[3];
-            const int K = k.shape_[3];
+            const int B = x.shape_[0]; // 10000
+            const int M = y.shape_[1]; // 50
+            const int C = x.shape_[1]; // 1
+            const int H = x.shape_[2]; // 28
+            const int W = x.shape_[3]; // 28
+            const int K = k.shape_[3]; // 5
 
             for (int b = 0; b < B; ++b)                     // for each image in the batch
                 for (int m = 0; m < M; ++m)                 // for each output feature maps
