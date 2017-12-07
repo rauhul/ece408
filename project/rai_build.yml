@@ -13,3 +13,6 @@ commands:
     - echo "Building project"
     - /src/build.sh
     - nvprof python /src/m3.1.py ece408-high 10000
+    # - nvprof -o timeline.nvprof python /src/m3.1.py ece408-high 10000
+    # - nvprof --analysis-metrics -o analysis.nvprof python /src/m3.1.py ece408-high 10000
+    # - nvprof --devices 0 --events branch,divergent_branch python /src/m3.1.py ece408-high 10000

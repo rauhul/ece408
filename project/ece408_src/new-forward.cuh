@@ -27,8 +27,8 @@ __global__ void forward_kernel(DType *y, const DType *x, const int M) {
     #define W     28
 
     #define y4d(i3,i2,i1,i0)    y[(i3)*(M*H_OUT*W_OUT) + (i2)*(H_OUT*W_OUT) + (i1)*(W_OUT) + i0]
-    #define x4d(i2,i1,i0)       x[(i2)*(H*W) + (i1)*(W) + i0]
-    #define k4d(i2,i1,i0) kernels[(i2)*(K*K) + (i1)*(K) + i0]
+    #define x4d(i2,i1,i0)       x[(i2)*(H*W)           + (i1)*(W)           + i0]
+    #define k4d(i2,i1,i0) kernels[(i2)*(K*K)           + (i1)*(K)           + i0]
 
     int n = blockIdx.x;
     int m = blockIdx.y;
@@ -42,12 +42,21 @@ __global__ void forward_kernel(DType *y, const DType *x, const int M) {
     if (h < H_OUT && w < W_OUT) {
         float acc = 0;
 
-        for(int p = 0; p < K; ++p)
-            for(int q = 0; q < K; ++q)
-                acc += tileCache[h+p][w+q] * k4d(m, p, q);
-
+        for(int p = 0; p < K; ++p) {
+            acc += tileCache[h+p][w+0] * k4d(m, p, 0);
+            acc += tileCache[h+p][w+1] * k4d(m, p, 1);
+            acc += tileCache[h+p][w+2] * k4d(m, p, 2);
+            acc += tileCache[h+p][w+3] * k4d(m, p, 3);
+            acc += tileCache[h+p][w+4] * k4d(m, p, 4);
+        }
         y4d(n,m,h,w) = acc;
     }
+
+
+    #undef H_OUT
+    #undef W_OUT
+    #undef H
+    #undef W
 
     #undef y4d
     #undef x4d
