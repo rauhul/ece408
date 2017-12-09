@@ -18,6 +18,31 @@ namespace op
 __constant__ float kernels[N_K * K * K];
 
 
+// int H_out = 24;
+// int W_out = 24;
+// int W_unroll = 576;
+
+template<typename gpu, typename DType>
+__global__ void unroll_kernel(DType* X, DType* X_unroll) {
+    int h_out, w_out, w_unroll, p, q;
+
+    int t = threadIdx.x;
+
+    h_out = t / 24; // rolled y position
+    w_out = t % 24; // rolled x position
+
+    #pragma unroll
+    for (p = 0; p < K; p++) {
+        #pragma unroll
+        for (q = 0; q < K; q++) {
+            w_unroll = p * K + q;
+            X_unroll[(w_unroll) + (t)] = X[(h_out + p) + (w_out + q)];
+        }
+    }
+}
+
+
+
 template<typename gpu, typename DType>
 __global__ void forward_kernel(DType *y, const DType *x, const int M) {
 
@@ -71,24 +96,6 @@ __global__ void forward_kernel(DType *y, const DType *x, const int M) {
 template<typename gpu, typename DType>
 void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DType> &x, const mshadow::Tensor<gpu, 4, DType> &w) {
 
-//     std::cout << "x" << std::endl;
-//     std::cout << "x.shape_[0]" << x.shape_[0] << std::endl;
-//     std::cout << "x.shape_[1]" << x.shape_[1] << std::endl;
-//     std::cout << "x.shape_[2]" << x.shape_[2] << std::endl;
-//     std::cout << "x.shape_[3]" << x.shape_[3] << std::endl;
-
-//     std::cout << "w" << std::endl;
-//     std::cout << "w.shape_[0]" << w.shape_[0] << std::endl;
-//     std::cout << "w.shape_[1]" << w.shape_[1] << std::endl;
-//     std::cout << "w.shape_[2]" << w.shape_[2] << std::endl;
-//     std::cout << "w.shape_[3]" << w.shape_[3] << std::endl;
-
-//     std::cout << "y" << std::endl;
-//     std::cout << "y.shape_[0]" << y.shape_[0] << std::endl;
-//     std::cout << "y.shape_[1]" << y.shape_[1] << std::endl;
-//     std::cout << "y.shape_[2]" << y.shape_[2] << std::endl;
-//     std::cout << "y.shape_[3]" << y.shape_[3] << std::endl;
-
 // x
 // x.shape_[0]10000
 // x.shape_[1]1
@@ -107,6 +114,18 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
 
     // You'll probably need to launch kernels against the right stream to keep MXNet happy
     cudaStream_t s = y.stream_->stream_;
+
+    int W_out = 24;
+    int H_out = 24;
+    int W_unroll = 25;
+    int H_unroll = 576;
+
+    float* X_unrolled = malloc(W_unroll * H_unroll * sizeof(float));
+    for (int n = 0; n < N; n++) {
+        unroll_kernel(C, H, W, K, n, X, X_unrolled);
+        gemm(H_unroll, M, W_unroll, X_unrolled, W, Y[n]);
+    }
+
 
     const int B = x.shape_[0];
     const int M = y.shape_[1];
