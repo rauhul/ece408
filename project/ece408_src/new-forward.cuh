@@ -3,99 +3,140 @@
 #define MXNET_OPERATOR_NEW_FORWARD_CUH_
 
 #include <mxnet/base.h>
+#include <iomanip>
 
 #define TILE_WIDTH 28
 
 #define N_K 50
 #define K   5
 
-namespace mxnet
-{
-namespace op
-{
-
+namespace mxnet {
+namespace op {
 
 __constant__ float kernels[N_K * K * K];
 
 
-// int H_out = 24;
-// int W_out = 24;
-// int W_unroll = 576;
-
 template<typename gpu, typename DType>
-__global__ void unroll_kernel(DType* X, DType* X_unroll) {
-    int h_out, w_out, w_unroll, p, q;
+__global__ void unroll_kernel(const DType* X, DType* X_unroll) {
+    int w_unroll, p, q;
 
-    int t = threadIdx.x;
-
-    h_out = t / 24; // rolled y position
-    w_out = t % 24; // rolled x position
+    int tx = threadIdx.x;
 
     #pragma unroll
-    for (p = 0; p < K; p++) {
+    for (p = 0; p < K; ++p) {
         #pragma unroll
-        for (q = 0; q < K; q++) {
+        for (q = 0; q < K; ++q) {//(h_out + p)*28 + (w_out + q)
             w_unroll = p * K + q;
-            X_unroll[(w_unroll) + (t)] = X[(h_out + p) + (w_out + q)];
+            X_unroll[w_unroll*576 + tx] = X[tx + q + (28*p)];
         }
     }
 }
 
-
-
 template<typename gpu, typename DType>
-__global__ void forward_kernel(DType *y, const DType *x, const int M) {
+__global__ void matmul_kernel(const DType* X, DType* Y) {
 
-    #define H_OUT 24
-    #define W_OUT 24
-    #define H     28
-    #define W     28
+    int ty = threadIdx.y;
+    int tx = threadIdx.x;
 
-    #define y4d(i3,i2,i1,i0)    y[(i3)*(M*H_OUT*W_OUT) + (i2)*(H_OUT*W_OUT) + (i1)*(W_OUT) + i0]
-    #define x4d(i2,i1,i0)       x[(i2)*(H*W)           + (i1)*(W)           + i0]
-    #define k4d(i2,i1,i0) kernels[(i2)*(K*K)           + (i1)*(K)           + i0]
+    int y  = threadIdx.y + 25*blockIdx.y;
+    int x  = threadIdx.x + 25*blockIdx.x;
 
-    int n = blockIdx.x;
-    int m = blockIdx.y;
-    int h = threadIdx.y;
-    int w = threadIdx.x;
-
-    __shared__ float tileCache[TILE_WIDTH][TILE_WIDTH];
-    tileCache[h][w] = x4d(n, h, w);
+    __shared__ DType tile[25][25];
+    if (y < 576) {
+        tile[tx][ty] = X[y + tx*576];
+    }
     __syncthreads();
 
-    if (h < H_OUT && w < W_OUT) {
-        float acc = 0;
-
-        for(int p = 0; p < K; ++p) {
-            acc += tileCache[h+p][w+0] * k4d(m, p, 0);
-            acc += tileCache[h+p][w+1] * k4d(m, p, 1);
-            acc += tileCache[h+p][w+2] * k4d(m, p, 2);
-            acc += tileCache[h+p][w+3] * k4d(m, p, 3);
-            acc += tileCache[h+p][w+4] * k4d(m, p, 4);
+    if (y < 576) {
+        DType acc = 0;
+        #pragma unroll
+        for (int i = 0; i < 25; ++i) {
+            acc += tile[i][ty] * kernels[x*25 + i];
         }
-        y4d(n,m,h,w) = acc;
+        Y[x*576 + y] = acc;
+    }
+}
+
+
+template<typename gpu, typename DType>
+__global__ void print_kernel(DType* X) {
+    printf("%i: %f\n", threadIdx.x, X[threadIdx.x]);
+}
+
+template<typename gpu, typename DType>
+__global__ void simmul_kernel(DType* X, DType* Y) {
+    int col = blockIdx.x;
+    int row = blockIdx.y;
+
+    float acc = 0;
+    for (int i = 0; i < 25; ++i) {
+        acc += X[row + i*576] * kernels[col*25 + i];
     }
 
+    Y[576*col + row] = acc;
+}
 
-    #undef H_OUT
-    #undef W_OUT
-    #undef H
-    #undef W
 
-    #undef y4d
-    #undef x4d
-    #undef k4d
+// Called by new-inl.h
+template<typename gpu, typename DType>
+void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DType> &x, const mshadow::Tensor<gpu, 4, DType> &w) {
+    cudaStream_t s = y.stream_->stream_;
+
+    const int B = x.shape_[0];
+
+    cudaMemcpyToSymbol(kernels, w.dptr_, N_K * K * K * sizeof(float), 0, cudaMemcpyHostToDevice);
+
+    dim3 unroll_grid(1, 1, 1);
+    dim3 unroll_block(576, 1, 1);
+
+    dim3 matmul_grid(2, 24, 1);
+    dim3 matmul_block(25, 25, 1);
+
+    dim3 simmul_grid(50, 576, 1);
+    dim3 simmul_block(1, 1, 1);
+
+
+
+    DType *x_unrolled;
+    cudaMalloc((void**) &x_unrolled, 25 * 576 * sizeof(DType));
+
+    for (int n = 0; n < B; ++n) {
+        unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0, s>>>(x.dptr_ + (n * 768), x_unrolled);
+        cudaDeviceSynchronize();
+
+        // simmul_kernel<gpu, DType><<<simmul_grid, simmul_block, 0, s>>>(x_unrolled, y.dptr_ + (n * 576 * 50));
+
+        matmul_kernel<gpu, DType><<<matmul_grid, matmul_block, 0, s>>>(x_unrolled, y.dptr_ + (n * 576 * 50));
+        cudaDeviceSynchronize();
+    }
+
+    // int n = 0;
+    // unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0 , s>>>(x.dptr_ + (n * 28 * 28), x_unrolled);
+
+
+
+    // for (int i = 0; i < 576; ++i) {
+    //     for (int k = 0; k < 25; ++k) {
+    //         std::cout << data[i + k*576] << ", ";
+    //     }
+    //     std::cout << std::endl;
+    // }
+
+    // dim3 a(576, 1, 1);
+    // dim3 b(1, 1, 1);
+
+    // print_kernel<gpu, DType><<<b, a, 0, s>>>(x_unrolled);
+
+    // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
+    MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
+    cudaFree(x_unrolled);
+
 }
 
 
 
-
-// This function is called by new-inl.h
-// Any code you write should be executed by this function
-template<typename gpu, typename DType>
-void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DType> &x, const mshadow::Tensor<gpu, 4, DType> &w) {
-
+}
+}
 // x
 // x.shape_[0]10000
 // x.shape_[1]1
@@ -111,41 +152,4 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
 // y.shape_[1]50
 // y.shape_[2]24
 // y.shape_[3]24
-
-    // You'll probably need to launch kernels against the right stream to keep MXNet happy
-    cudaStream_t s = y.stream_->stream_;
-
-    int W_out = 24;
-    int H_out = 24;
-    int W_unroll = 25;
-    int H_unroll = 576;
-
-    float* X_unrolled = malloc(W_unroll * H_unroll * sizeof(float));
-    for (int n = 0; n < N; n++) {
-        unroll_kernel(C, H, W, K, n, X, X_unrolled);
-        gemm(H_unroll, M, W_unroll, X_unrolled, W, Y[n]);
-    }
-
-
-    const int B = x.shape_[0];
-    const int M = y.shape_[1];
-
-    dim3 blockDim(TILE_WIDTH, TILE_WIDTH, 1);
-    dim3 gridDim(B, M, 1);
-
-    cudaMemcpyToSymbol(kernels, w.dptr_, N_K * K * K * sizeof(float), 0, cudaMemcpyHostToDevice);
-
-    // Call the kernel
-    forward_kernel<gpu, DType><<<gridDim, blockDim, 0, s>>>(y.dptr_,x.dptr_,M);
-
-    // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
-    MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
-
-}
-
-
-
-}
-}
-
 #endif
