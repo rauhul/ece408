@@ -45,7 +45,7 @@ __global__ void matmul_kernel(const DType* X, DType* Y) {
 
     __shared__ DType tile[25][25];
     if (y < 576) {
-        tile[tx][ty] = X[y + tx*576];
+        tile[tx][ty] = X[tx*576 + y];
     }
     __syncthreads();
 
@@ -61,9 +61,9 @@ __global__ void matmul_kernel(const DType* X, DType* Y) {
         acc = 0;
         #pragma unroll
         for (int i = 0; i < 25; ++i) {
-            acc += tile[i][ty] * kernels[2*tx*25 + i];
+            acc += tile[i][ty] * kernels[(tx+25)*25 + i];
         }
-        Y[2*tx*576 + y] = acc;
+        Y[(tx+25)*576 + y] = acc;
     }
 }
 
