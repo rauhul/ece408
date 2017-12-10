@@ -13,9 +13,9 @@
 namespace mxnet {
 namespace op {
 
-__constant__ float kernels[N_K * K * K];
+// __constant__ float kernels[N_K * K * K];
 
-#define UNROLL_GROUP_SIZE 10000
+#define UNROLL_GROUP_SIZE 2000
 
 template<typename gpu, typename DType>
 __global__ void unroll_kernel(const DType* X, DType* X_unroll) {
@@ -37,7 +37,7 @@ __global__ void unroll_kernel(const DType* X, DType* X_unroll) {
 }
 
 template<typename gpu, typename DType>
-__global__ void matmul_kernel(const DType* X, DType* Y) {
+__global__ void matmul_kernel(const DType* X, DType* Y, DType* W) {
 
     int ty = threadIdx.y;
     int tx = threadIdx.x;
@@ -45,9 +45,15 @@ __global__ void matmul_kernel(const DType* X, DType* Y) {
     int y  = threadIdx.y + 25*blockIdx.y;
 
     __shared__ DType tile[25][25];
+    __shared__ DType filter[N_K * K * K];
+
     if (y < 576) {
         tile[tx][ty] = X[(blockIdx.x * 576 * 25) + tx*576 + y];
     }
+
+    __syncthreads();
+    filter[(ty+00)*25 + tx] = W[(ty+00)*25 + tx];
+    filter[(ty+25)*25 + tx] = W[(ty+25)*25 + tx];
     __syncthreads();
 
     if (y < 576) {
@@ -55,47 +61,25 @@ __global__ void matmul_kernel(const DType* X, DType* Y) {
         acc = 0;
         #pragma unroll
         for (int i = 0; i < 25; ++i) {
-            acc += tile[i][ty] * kernels[tx*25 + i];
+            acc += tile[i][ty] * filter[tx*25 + i];
         }
         Y[(blockIdx.x * 576 * 50) + tx*576 + y] = acc;
 
         acc = 0;
         #pragma unroll
         for (int i = 0; i < 25; ++i) {
-            acc += tile[i][ty] * kernels[(tx+25)*25 + i];
+            acc += tile[i][ty] * filter[(tx+25)*25 + i];
         }
         Y[(blockIdx.x * 576 * 50) + (tx+25)*576 + y] = acc;
     }
 }
 
-
-template<typename gpu, typename DType>
-__global__ void print_kernel(DType* X) {
-    printf("%i: %f\n", threadIdx.x, X[threadIdx.x]);
-}
-
-template<typename gpu, typename DType>
-__global__ void simmul_kernel(DType* X, DType* Y) {
-    int col = blockIdx.x;
-    int row = blockIdx.y;
-
-    float acc = 0;
-    for (int i = 0; i < 25; ++i) {
-        acc += X[row + i*576] * kernels[col*25 + i];
-    }
-
-    Y[576*col + row] = acc;
-}
-
-
 // Called by new-inl.h
 template<typename gpu, typename DType>
 void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DType> &x, const mshadow::Tensor<gpu, 4, DType> &w) {
-    cudaStream_t s = y.stream_->stream_;
+    // cudaStream_t s = y.stream_->stream_;
 
     const int B = x.shape_[0];
-
-    cudaMemcpyToSymbol(kernels, w.dptr_, N_K * K * K * sizeof(float), 0, cudaMemcpyHostToDevice);
 
     dim3 unroll_grid(UNROLL_GROUP_SIZE, 1, 1);
     dim3 unroll_block(576, 1, 1);
@@ -103,18 +87,41 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
     dim3 matmul_grid(UNROLL_GROUP_SIZE, 24, 1);
     dim3 matmul_block(25, 25, 1);
 
-    dim3 simmul_grid(50, 576, 1);
-    dim3 simmul_block(1, 1, 1);
-
-
 
     DType *x_unrolled;
-    cudaMalloc((void**) &x_unrolled, UNROLL_GROUP_SIZE * 25 * 576 * sizeof(DType));
+    cudaMalloc((void**) &x_unrolled, 10000 * 25 * 576 * sizeof(DType));
 
-    for (int n = 0; n < B/UNROLL_GROUP_SIZE; ++n) {
-        unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0, s>>>(x.dptr_ + (n * UNROLL_GROUP_SIZE * 784), x_unrolled);
-        matmul_kernel<gpu, DType><<<matmul_grid, matmul_block, 0, s>>>(x_unrolled, y.dptr_ + (n * UNROLL_GROUP_SIZE * 576 * 50));
-    }
+    cudaStream_t stream0;
+    cudaStream_t stream1;
+    cudaStream_t stream2;
+    cudaStream_t stream3;
+    cudaStream_t stream4;
+    cudaStreamCreate(&stream0);
+    cudaStreamCreate(&stream1);
+    cudaStreamCreate(&stream2);
+    cudaStreamCreate(&stream3);
+    cudaStreamCreate(&stream4);
+
+    unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0, stream0>>>(x.dptr_    + (0 * UNROLL_GROUP_SIZE * 784),        x_unrolled + (0 * UNROLL_GROUP_SIZE * 576 * 25));
+    matmul_kernel<gpu, DType><<<matmul_grid, matmul_block, 0, stream0>>>(x_unrolled + (0 * UNROLL_GROUP_SIZE * 576 * 25),   y.dptr_    + (0 * UNROLL_GROUP_SIZE * 576 * 50), w.dptr_);
+
+    unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0, stream1>>>(x.dptr_    + (1 * UNROLL_GROUP_SIZE * 784),        x_unrolled + (1 * UNROLL_GROUP_SIZE * 576 * 25));
+    matmul_kernel<gpu, DType><<<matmul_grid, matmul_block, 0, stream1>>>(x_unrolled + (1 * UNROLL_GROUP_SIZE * 576 * 25),   y.dptr_    + (1 * UNROLL_GROUP_SIZE * 576 * 50), w.dptr_);
+
+    unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0, stream2>>>(x.dptr_    + (2 * UNROLL_GROUP_SIZE * 784),        x_unrolled + (2 * UNROLL_GROUP_SIZE * 576 * 25));
+    matmul_kernel<gpu, DType><<<matmul_grid, matmul_block, 0, stream2>>>(x_unrolled + (2 * UNROLL_GROUP_SIZE * 576 * 25),   y.dptr_    + (2 * UNROLL_GROUP_SIZE * 576 * 50), w.dptr_);
+
+    unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0, stream3>>>(x.dptr_    + (3 * UNROLL_GROUP_SIZE * 784),        x_unrolled + (3 * UNROLL_GROUP_SIZE * 576 * 25));
+    matmul_kernel<gpu, DType><<<matmul_grid, matmul_block, 0, stream3>>>(x_unrolled + (3 * UNROLL_GROUP_SIZE * 576 * 25),   y.dptr_    + (3 * UNROLL_GROUP_SIZE * 576 * 50), w.dptr_);
+
+    unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0, stream4>>>(x.dptr_    + (4 * UNROLL_GROUP_SIZE * 784),        x_unrolled + (4 * UNROLL_GROUP_SIZE * 576 * 25));
+    matmul_kernel<gpu, DType><<<matmul_grid, matmul_block, 0, stream4>>>(x_unrolled + (4 * UNROLL_GROUP_SIZE * 576 * 25),   y.dptr_    + (4 * UNROLL_GROUP_SIZE * 576 * 50), w.dptr_);
+
+    cudaStreamSynchronize(stream0);
+    cudaStreamSynchronize(stream1);
+    cudaStreamSynchronize(stream2);
+    cudaStreamSynchronize(stream3);
+    cudaStreamSynchronize(stream4);
 
 
     // dim3 grid(1, 1, 1);
@@ -145,6 +152,11 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
     // Use MSHADOW_CUDA_CALL to check for CUDA runtime errors.
     MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
     cudaFree(x_unrolled);
+    cudaStreamDestroy(stream0);
+    cudaStreamDestroy(stream1);
+    cudaStreamDestroy(stream2);
+    cudaStreamDestroy(stream3);
+    cudaStreamDestroy(stream4);
 
 }
 
