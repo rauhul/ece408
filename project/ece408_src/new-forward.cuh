@@ -22,12 +22,15 @@ __global__ void unroll_kernel(const DType* X, DType* X_unroll) {
 
     int tx = threadIdx.x;
 
+    int h_out = tx / 24;
+    int w_out = tx % 24;
+
     #pragma unroll
     for (p = 0; p < K; ++p) {
         #pragma unroll
         for (q = 0; q < K; ++q) {//(h_out + p)*28 + (w_out + q)
             w_unroll = p * K + q;
-            X_unroll[w_unroll*576 + tx] = X[tx + q + (28*p)];
+            X_unroll[w_unroll*576 + tx] = X[(h_out + p)*28 + (w_out + q)];//tx + q + (28*p)
         }
     }
 }
@@ -39,7 +42,6 @@ __global__ void matmul_kernel(const DType* X, DType* Y) {
     int tx = threadIdx.x;
 
     int y  = threadIdx.y + 25*blockIdx.y;
-    int x  = threadIdx.x + 25*blockIdx.x;
 
     __shared__ DType tile[25][25];
     if (y < 576) {
@@ -48,12 +50,20 @@ __global__ void matmul_kernel(const DType* X, DType* Y) {
     __syncthreads();
 
     if (y < 576) {
-        DType acc = 0;
+        DType acc;
+        acc = 0;
         #pragma unroll
         for (int i = 0; i < 25; ++i) {
-            acc += tile[i][ty] * kernels[x*25 + i];
+            acc += tile[i][ty] * kernels[tx*25 + i];
         }
-        Y[x*576 + y] = acc;
+        Y[tx*576 + y] = acc;
+
+        acc = 0;
+        #pragma unroll
+        for (int i = 0; i < 25; ++i) {
+            acc += tile[i][ty] * kernels[2*tx*25 + i];
+        }
+        Y[2*tx*576 + y] = acc;
     }
 }
 
@@ -89,7 +99,7 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
     dim3 unroll_grid(1, 1, 1);
     dim3 unroll_block(576, 1, 1);
 
-    dim3 matmul_grid(2, 24, 1);
+    dim3 matmul_grid(1, 24, 1);
     dim3 matmul_block(25, 25, 1);
 
     dim3 simmul_grid(50, 576, 1);
@@ -101,7 +111,7 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
     cudaMalloc((void**) &x_unrolled, 25 * 576 * sizeof(DType));
 
     for (int n = 0; n < B; ++n) {
-        unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0, s>>>(x.dptr_ + (n * 768), x_unrolled);
+        unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0, s>>>(x.dptr_ + (n * 784), x_unrolled);
         cudaDeviceSynchronize();
 
         // simmul_kernel<gpu, DType><<<simmul_grid, simmul_block, 0, s>>>(x_unrolled, y.dptr_ + (n * 576 * 50));
@@ -109,6 +119,15 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
         matmul_kernel<gpu, DType><<<matmul_grid, matmul_block, 0, s>>>(x_unrolled, y.dptr_ + (n * 576 * 50));
         cudaDeviceSynchronize();
     }
+
+
+    // dim3 grid(1, 1, 1);
+    // dim3 block(784, 1, 1);
+
+    // print_kernel<gpu, DType><<<grid, block, 0, s>>>(x.dptr_);
+    // cudaDeviceSynchronize();
+
+
 
     // int n = 0;
     // unroll_kernel<gpu, DType><<<unroll_grid, unroll_block, 0 , s>>>(x.dptr_ + (n * 28 * 28), x_unrolled);
