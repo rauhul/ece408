@@ -74,14 +74,14 @@ public:
     CHECK_EQ(out_data.size(), 1U);        // create a single output
     CHECK_EQ(req[conv::kOut], kWriteTo);  // expect to be overwriting output
     CHECK_EQ(this->param_.kernel[0], this->param_.kernel[1]); // ECE408: square kernel
-    
+
     const auto &x = in_data[conv::kData];
     const auto &xshape = x.shape_;
     const auto &w = in_data[conv::kWeight];
     const auto &wshape = w.shape_;
     const auto &y = out_data[conv::kOut];
     const auto &yshape = y.shape_;
-    
+
     CHECK_EQ(wshape.ndim(), 4U); // num_filter , channel  y, x
     CHECK_EQ(wshape[0], this->param_.num_filter); // ECE408: support 1 group
     CHECK_EQ(wshape[1], xshape[1]);
@@ -108,13 +108,25 @@ public:
     Tensor<xpu, 4, DType> x_4d = x.get_with_shape<xpu, 4, DType>(
         Shape4(xshape[0], xshape[1], xshape[2], xshape[3]), s);
 
+    // zero the output.
+    y_4d = scalar<DType>(0) * y_4d;
 
-  auto start = std::chrono::high_resolution_clock::now();
-  forward<xpu, DType>(y_4d, x_4d, w_4d);
-  auto end = std::chrono::high_resolution_clock::now();
-  std::chrono::duration<double> elapsed_seconds = end-start;
-  fprintf(stdout, "Op Time: %f\n", elapsed_seconds.count());
-              
+    // Synchronize before timer
+#ifdef __CUDACC__
+    MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
+#endif
+
+    auto start = std::chrono::high_resolution_clock::now();
+    forward<xpu, DType>(y_4d, x_4d, w_4d);
+
+    // Synchronize after student code
+#ifdef __CUDACC__
+    MSHADOW_CUDA_CALL(cudaDeviceSynchronize());
+#endif
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> elapsed_seconds = end - start;
+    fprintf(stdout, "Op Time: %f\n", elapsed_seconds.count());
+
   }
 
   virtual void Backward(const OpContext &ctx,

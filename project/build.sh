@@ -11,7 +11,7 @@ SCRIPTPATH=$(dirname "$SCRIPT")
 SRC_DIR="$SCRIPTPATH/ece408_src"
 SRCS=`find $SRC_DIR -type f`
 
-# Where MXNet source lives. 
+# Where MXNet source lives.
 # MXNET_SRC_ROOT is defined in the rai execution environment.
 # if you are developing locally you can define it yourself or enter it below
 if [ -z ${MXNET_SRC_ROOT+x} ]; then
