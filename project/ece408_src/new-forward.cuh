@@ -66,20 +66,4 @@ void forward(mshadow::Tensor<gpu, 4, DType> &y, const mshadow::Tensor<gpu, 4, DT
 }
 }
 
-// x
-// x.shape_[0]10000
-// x.shape_[1]1
-// x.shape_[2]28
-// x.shape_[3]28
-// w
-// w.shape_[0]50
-// w.shape_[1]1
-// w.shape_[2]5
-// w.shape_[3]5
-// y
-// y.shape_[0]10000
-// y.shape_[1]50
-// y.shape_[2]24
-// y.shape_[3]24
-
 #endif
